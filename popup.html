@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Nextcloud-Quick-Share</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        padding: 10px;
+        width: 250px;
+      }
+      label {
+        display: block;
+        margin-top: 10px;
+      }
+      input {
+        width: 100%;
+        padding: 6px;
+      }
+      button {
+        margin-top: 15px;
+        width: 100%;
+        padding: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h3>アップロード設定</h3>
+
+    <label>
+      パスワード:
+      <input type="text" id="password" />
+    </label>
+
+    <label>
+      有効期限:
+      <input type="date" id="expireDate" />
+    </label>
+
+    <button id="runBtn">アップロードする</button>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

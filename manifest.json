@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Nextcloud-Quick-Share",
+  "version": "1.0",
+  "description": "Upload files to Nextcloud via WebDAV",
+  "permissions": ["activeTab", "scripting"],
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Nextcloud-Quick-Share"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://*/*"],
+      "js": ["content.js"],
+      "all_frames": true
+    }
+  ]
+}
