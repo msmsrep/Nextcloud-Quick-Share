@@ -7,21 +7,51 @@
     <style>
       body {
         font-family: sans-serif;
-        padding: 10px;
-        width: 250px;
+        padding: 12px;
+        width: 280px;
+        margin: 0;
+      }
+      h3 {
+        margin: 0 0 4px;
+        font-size: 14px;
       }
       label {
         display: block;
-        margin-top: 10px;
+        margin-top: 12px;
+        font-size: 13px;
       }
       input {
         width: 100%;
         padding: 6px;
+        margin-top: 4px;
+        box-sizing: border-box;
       }
       button {
-        margin-top: 15px;
+        margin-top: 16px;
         width: 100%;
         padding: 10px;
+        cursor: pointer;
+      }
+      #status {
+        margin-top: 12px;
+        font-size: 12px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      #status.error {
+        color: #b00020;
+      }
+      #status.ok {
+        color: #0b6b2f;
+      }
+      #result {
+        display: none;
+        margin-top: 8px;
+      }
+      #result button {
+        margin-top: 6px;
+        padding: 6px;
       }
     </style>
   </head>
@@ -29,17 +59,26 @@
     <h3>アップロード設定</h3>
 
     <label>
-      パスワード:
-      <input type="text" id="password" />
+      パスワード（任意）
+      <input type="password" id="password" autocomplete="new-password" />
     </label>
 
     <label>
-      有効期限:
+      有効期限（任意）
       <input type="date" id="expireDate" />
     </label>
 
     <button id="runBtn">アップロードする</button>
 
+    <div id="status"></div>
+
+    <div id="result">
+      <input type="text" id="shareUrl" readonly />
+      <button id="copyBtn">共有URLをコピー</button>
+    </div>
+
+    <!-- uploader.js はページへ注入する関数を定義する。popup.js より前に読む。 -->
+    <script src="uploader.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>
