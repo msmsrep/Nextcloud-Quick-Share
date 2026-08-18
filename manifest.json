@@ -1,20 +1,26 @@
 {
   "manifest_version": 3,
   "name": "Nextcloud-Quick-Share",
-  "version": "1.0",
-  "description": "Upload files to Nextcloud via WebDAV",
-  "permissions": ["activeTab", "scripting"],
+  "version": "1.0.0",
+  "description": "現在開いている Nextcloud のページからファイルをアップロードし、共有リンクを作成します。",
 
-  "action": {
-    "default_popup": "popup.html",
-    "default_title": "Nextcloud-Quick-Share"
+  "permissions": ["activeTab", "scripting", "storage"],
+
+  "icons": {
+    "16": "icon/icon-16.png",
+    "32": "icon/icon-32.png",
+    "48": "icon/icon-48.png",
+    "128": "icon/icon-128.png"
   },
 
-  "content_scripts": [
-    {
-      "matches": ["https://*/*"],
-      "js": ["content.js"],
-      "all_frames": true
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "Nextcloud-Quick-Share",
+    "default_icon": {
+      "16": "icon/icon-16.png",
+      "32": "icon/icon-32.png",
+      "48": "icon/icon-48.png",
+      "128": "icon/icon-128.png"
     }
-  ]
+  }
 }

@@ -1,0 +1,277 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>store asset builder</title>
+<body style="font-family:sans-serif;margin:0;padding:16px;background:#eee">
+<p id="log" style="white-space:pre-wrap">building...</p>
+<div id="stage"></div>
+
+<script>
+const NAVY = "#18193F";
+const AMBER = "#F2C57C";
+const CREAM = "#FAF3E8";
+
+const log = (m) => { document.getElementById("log").textContent = m; };
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* ---------- 出力する画像の規格 ---------- */
+
+// スクリーンショットは各ストアの規定サイズをすべて書き出す。
+const SHOT_FORMATS = [
+    { w: 1366, h: 768, note: "Edge アドオン" },
+    { w: 1280, h: 800, note: "Chrome ウェブストア" },
+    { w: 640, h: 400, note: "Chrome ウェブストア（小）" },
+];
+
+const SHOTS = [
+    {
+        slug: "screenshot-1",
+        scenario: "fresh",
+        title: "開いている Nextcloud から<br/>そのままアップロード",
+        lead: "ツールバーのアイコンを押して、ファイルを選ぶだけ。<br/>パスワードと有効期限を付けた公開共有リンクが作られ、<br/>URL はクリップボードにコピーされます。",
+        tweak: async (doc) => {
+            doc.getElementById("password").value = "correct-horse";
+            doc.getElementById("expireDate").value = "2026-09-30";
+        },
+    },
+    {
+        slug: "screenshot-2",
+        scenario: "ok",
+        title: "結果はポップアップに<br/>そのまま残ります",
+        lead: "ファイル選択でポップアップが閉じても、次に開いたときに<br/>共有 URL を確認してコピーできます。同名ファイルは<br/>上書きせず、別名で保存したことも表示します。",
+    },
+    {
+        slug: "screenshot-3",
+        scenario: "unknown",
+        title: "許可したサイトにしか<br/>送信しません",
+        lead: "常時どのサイトにも入り込むことはありません。実行前に<br/>対象ページを確認し、未登録のサイトでは二段階の承認を<br/>求めます。登録済みサイトは一覧から解除できます。",
+        tweak: async (doc) => { doc.getElementById("runBtn").click(); },
+    },
+];
+
+/* ---------- アイコンの埋め込み ---------- */
+
+// 画像化するとき外部参照は読み込まれないので、icon.svg を文字列として取り込み、
+// 入れ子の <svg> として合成図に差し込む。
+let ICON_SRC = "";
+
+function embedIcon(x, y, size) {
+    const viewBox = (ICON_SRC.match(/viewBox="([^"]+)"/) || [])[1] || "0 0 100 100";
+    const inner = ICON_SRC
+        .replace(/<\?xml[^>]*\?>/g, "")
+        .replace(/<!--[\s\S]*?-->/g, "")
+        .replace(/<svg[^>]*>/, "")
+        .replace(/<\/svg>\s*$/, "");
+    return `<svg x="${x}" y="${y}" width="${size}" height="${size}" viewBox="${viewBox}"
+                 xmlns="http://www.w3.org/2000/svg">${inner}</svg>`;
+}
+
+/* ---------- 実物のポップアップを描画して DOM を取り出す ---------- */
+
+// シナリオごとにポップアップを iframe で動かし、JS が動いた「後」の DOM を回収する。
+// 手描きのモックではなく実物なので、実装と食い違わない。
+async function capturePopup(scenario, tweak) {
+    const frame = document.createElement("iframe");
+    frame.style.cssText = "width:300px;height:700px;border:0;position:absolute;left:-9999px";
+    frame.src = "/popup.html?scenario=" + scenario;
+    document.getElementById("stage").appendChild(frame);
+
+    await new Promise((res) => { frame.onload = res; });
+    await wait(300); // init() の storage 読み出しを待つ
+
+    const doc = frame.contentDocument;
+    if (tweak) { await tweak(doc, frame.contentWindow); await wait(250); }
+
+    // input の現在値は innerHTML に出ないので属性へ写す
+    for (const el of doc.querySelectorAll("input")) {
+        if (el.value) el.setAttribute("value", el.value);
+    }
+
+    const css = [...doc.querySelectorAll("style")].map((s) => s.textContent).join("\n");
+
+    // foreignObject の中身は整形式 XML でなければならない。innerHTML だと
+    // <input> のような空要素が閉じられず SVG のパースに失敗するため、
+    // XMLSerializer で XHTML として直列化する。
+    const ser = new XMLSerializer();
+    const html = [...doc.body.children]
+        .filter((el) => el.tagName.toLowerCase() !== "script")
+        .map((el) => ser.serializeToString(el))
+        .join("");
+
+    // 拡大率を決めるために実寸の高さを測っておく（シナリオごとに高さが違う）。
+    // documentElement だと iframe のビューポート高になってしまうので body の実寸を使う。
+    const height = Math.ceil(doc.body.getBoundingClientRect().height);
+
+    frame.remove();
+    return { css, html, height };
+}
+
+/* ---------- 合成 ---------- */
+
+// ポップアップの CSS は :root にライトとダークの両方を定義している。
+// ストア画像はライト固定にしたいので、ラッパー側で変数を上書きする。
+const LIGHT_OVERRIDE = `
+  .nqs-popup{
+    /* input や button のネイティブ描画もライトに固定する
+       （継承プロパティなので子孫の UA スタイルにも効く） */
+    color-scheme: light;
+    --fg:#222; --bg:#fff; --muted:#666; --ok:#0b6b2f; --err:#b00020; --border:#ddd;
+    font-family:sans-serif; width:280px; margin:0; padding:12px;
+    background:var(--bg); color:var(--fg);
+    border-radius:10px; box-shadow:0 18px 50px rgba(24,25,63,.22);
+  }`;
+
+function composition({ w, h, title, lead, popup }) {
+    // 縦にはみ出して切れないよう、実寸の高さから拡大率を決める
+    const scale = Math.min(1.65, (h * 0.88) / popup.height);
+
+    // 小さい規格では文字列中の強制改行が効きすぎて行数が増え、
+    // 左下のアイコンに文章が重なる。小さいときは自然改行に任せる。
+    const small = w < 900;
+    if (small) {
+        const unwrap = (s) => s.replace(/<br\s*\/?>/g, " ");
+        title = unwrap(title);
+        lead = unwrap(lead);
+    }
+
+    // 左下のアクセント円と、その中に置くアイコン。
+    // アイコンは円の中心ではなく「左下の角」を基準に置き、本文と干渉させない。
+    const cx = w * 0.055, cy = h * 0.9, r = h * 0.30;
+    const iconSize = h * 0.13;
+    const iconX = w * 0.035;
+    const iconY = h - iconSize - h * 0.06;
+
+    return `
+<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+  <rect width="${w}" height="${h}" fill="${CREAM}"/>
+  <circle cx="${cx}" cy="${cy}" r="${r}" fill="${AMBER}" opacity="0.18"/>
+  ${embedIcon(iconX, iconY, iconSize)}
+  <foreignObject x="0" y="0" width="${w}" height="${h}">
+    <div xmlns="http://www.w3.org/1999/xhtml" style="width:${w}px;height:${h}px;box-sizing:border-box;display:flex;align-items:center;gap:${w * 0.05}px;padding:0 ${w * 0.07}px;font-family:sans-serif">
+      <style>${popup.css}${LIGHT_OVERRIDE}</style>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:${Math.round(w * 0.037)}px;line-height:1.35;font-weight:700;color:${NAVY};letter-spacing:.01em">${title}</div>
+        <div style="margin-top:${Math.round(h * 0.035)}px;font-size:${Math.round(w * 0.0165)}px;line-height:1.8;color:#4a4b6a">${lead}</div>
+      </div>
+      <div style="flex:none;transform:scale(${scale});transform-origin:center right">
+        <div class="nqs-popup">${popup.html}</div>
+      </div>
+    </div>
+  </foreignObject>
+</svg>`;
+}
+
+// Chrome ウェブストアの小型プロモタイル（440x280）
+function promoTile(w, h) {
+    const cx = w * 0.055, cy = h * 0.9, r = h * 0.42;
+    const iconSize = h * 0.46;
+    return `
+<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+  <rect width="${w}" height="${h}" fill="${CREAM}"/>
+  <circle cx="${cx}" cy="${cy}" r="${r}" fill="${AMBER}" opacity="0.18"/>
+  ${embedIcon(w * 0.09, (h - iconSize) / 2, iconSize)}
+  <text x="${w * 0.36}" y="${h * 0.46}" font-family="sans-serif" font-size="${Math.round(w * 0.072)}"
+        font-weight="700" fill="${NAVY}">Nextcloud</text>
+  <text x="${w * 0.36}" y="${h * 0.63}" font-family="sans-serif" font-size="${Math.round(w * 0.072)}"
+        font-weight="700" fill="${NAVY}">Quick Share</text>
+  <text x="${w * 0.36}" y="${h * 0.78}" font-family="sans-serif" font-size="${Math.round(w * 0.038)}"
+        fill="#4a4b6a">ワンクリックで共有リンクを作成</text>
+</svg>`;
+}
+
+function svgToPng(svg, w, h) {
+    return new Promise((resolve, reject) => {
+        const url = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+        const img = new Image();
+        img.onload = () => {
+            const c = document.createElement("canvas");
+            c.width = w; c.height = h;
+            const ctx = c.getContext("2d");
+            ctx.drawImage(img, 0, 0, w, h);
+            resolve(c.toDataURL("image/png").split(",")[1]);
+        };
+        img.onerror = () => {
+            // 失敗時は原因を掴めるよう、XML として解析し直してエラーを取り出す
+            const doc = new DOMParser().parseFromString(svg, "image/svg+xml");
+            const err = doc.querySelector("parsererror");
+            reject(new Error("SVG のラスタライズに失敗: " + (err ? err.textContent.slice(0, 300) : "原因不明")));
+        };
+        img.src = url;
+    });
+}
+
+/* ---------- 300x300 ストアロゴ ---------- */
+
+function buildLogo() {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+            const S = 300;
+            const c = document.createElement("canvas");
+            c.width = c.height = S;
+            const ctx = c.getContext("2d");
+            ctx.fillStyle = CREAM;
+            ctx.fillRect(0, 0, S, S);
+            const inner = 196;
+            const off = (S - inner) / 2;
+            ctx.imageSmoothingQuality = "high";
+            ctx.drawImage(img, off, off, inner, inner);
+            resolve(c.toDataURL("image/png").split(",")[1]);
+        };
+        img.onerror = () => reject(new Error("icon.svg を読めません"));
+        img.src = "/icon/icon.svg";
+    });
+}
+
+/* ---------- 実行 ---------- */
+
+(async () => {
+    try {
+        ICON_SRC = await (await fetch("/icon/icon.svg")).text();
+
+        const out = {};
+
+        log("ロゴを生成中...");
+        out["logo-300.png"] = { png: await buildLogo(), w: 300, h: 300 };
+
+        log("プロモタイルを生成中...");
+        out["promo-440x280.png"] = { png: await svgToPng(promoTile(440, 280), 440, 280), w: 440, h: 280 };
+
+        for (const shot of SHOTS) {
+            // ポップアップの取得はシナリオごとに 1 回。全サイズで同じ DOM を使う。
+            log(shot.slug + " のポップアップを取得中...");
+            const popup = await capturePopup(shot.scenario, shot.tweak);
+
+            for (const f of SHOT_FORMATS) {
+                const name = `${shot.slug}-${f.w}x${f.h}.png`;
+                log(name + " を生成中...");
+                const svg = composition({ w: f.w, h: f.h, title: shot.title, lead: shot.lead, popup });
+                out[name] = { png: await svgToPng(svg, f.w, f.h), w: f.w, h: f.h };
+            }
+        }
+
+        window.__assets = out;
+
+        // そのまま store/ へ保存する（サーバー側で寸法を検証してから書き出す）
+        const res = await fetch("/save", { method: "POST", body: JSON.stringify(out) });
+        const body = await res.text();
+        if (!res.ok) throw new Error("保存に失敗: " + body);
+        log("保存しました:\n" + body);
+
+        // 目視確認用にページへも並べる
+        for (const [name, a] of Object.entries(out)) {
+            const fig = document.createElement("div");
+            fig.style.cssText = "margin:12px 0";
+            fig.innerHTML = `<div style="font:12px sans-serif">${name} (${a.w}x${a.h})</div>`;
+            const im = new Image();
+            im.src = "data:image/png;base64," + a.png;
+            im.style.cssText = "max-width:100%;border:1px solid #ccc;background:#fff";
+            fig.appendChild(im);
+            document.getElementById("stage").appendChild(fig);
+        }
+    } catch (e) {
+        log("ERROR: " + e.message);
+        window.__error = e.message;
+    }
+})();
+</script>
+</body>
