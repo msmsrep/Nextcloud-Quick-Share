@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Nextcloud-Quick-Share",
-  "version": "1.3",
+  "version": "1.0.0",
   "description": "現在開いている Nextcloud のページからファイルをアップロードし、共有リンクを作成します。",
 
   "permissions": ["activeTab", "scripting", "storage"],
