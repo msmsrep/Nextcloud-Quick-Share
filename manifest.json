@@ -6,8 +6,21 @@
 
   "permissions": ["activeTab", "scripting", "storage"],
 
+  "icons": {
+    "16": "icon/icon-16.png",
+    "32": "icon/icon-32.png",
+    "48": "icon/icon-48.png",
+    "128": "icon/icon-128.png"
+  },
+
   "action": {
     "default_popup": "src/popup.html",
-    "default_title": "Nextcloud-Quick-Share"
+    "default_title": "Nextcloud-Quick-Share",
+    "default_icon": {
+      "16": "icon/icon-16.png",
+      "32": "icon/icon-32.png",
+      "48": "icon/icon-48.png",
+      "128": "icon/icon-128.png"
+    }
   }
 }

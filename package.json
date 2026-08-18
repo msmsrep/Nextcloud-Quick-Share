@@ -5,6 +5,7 @@
   "description": "Edge/Chrome 拡張機能。Nextcloud へファイルをアップロードして共有リンクを作る。",
   "scripts": {
     "test": "node --test \"test/*.test.js\"",
-    "test:ui": "node test/ui/serve.js"
+    "test:ui": "node test/ui/serve.js",
+    "build:store": "node store/build/serve.js"
   }
 }
