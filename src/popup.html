@@ -5,11 +5,33 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Nextcloud-Quick-Share</title>
     <style>
+      /* ポップアップはブラウザのテーマに従うため、両方の配色を用意する */
+      :root {
+        color-scheme: light dark;
+        --fg: #222;
+        --bg: #fff;
+        --muted: #666;
+        --ok: #0b6b2f;
+        --err: #b00020;
+        --border: #ddd;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e8eaed;
+          --bg: #202124;
+          --muted: #9aa0a6;
+          --ok: #6ee7a0;
+          --err: #ff8a9b;
+          --border: #5f6368;
+        }
+      }
       body {
         font-family: sans-serif;
         padding: 12px;
         width: 280px;
         margin: 0;
+        background: var(--bg);
+        color: var(--fg);
       }
       h3 {
         margin: 0 0 4px;
@@ -40,10 +62,10 @@
         word-break: break-all;
       }
       #status.error {
-        color: #b00020;
+        color: var(--err);
       }
       #status.ok {
-        color: #0b6b2f;
+        color: var(--ok);
       }
       #result {
         display: none;
@@ -52,6 +74,41 @@
       #result button {
         margin-top: 6px;
         padding: 6px;
+      }
+      #origins {
+        display: none;
+        margin-top: 16px;
+        border-top: 1px solid var(--border);
+        padding-top: 8px;
+      }
+      #origins h4 {
+        margin: 0 0 6px;
+        font-size: 12px;
+        font-weight: normal;
+        color: var(--muted);
+      }
+      #originList {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      #originList li {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        padding: 3px 0;
+      }
+      #originList span {
+        flex: 1;
+        word-break: break-all;
+      }
+      #originList button {
+        margin-top: 0;
+        width: auto;
+        flex: none;
+        padding: 2px 8px;
+        font-size: 11px;
       }
     </style>
   </head>
@@ -75,6 +132,11 @@
     <div id="result">
       <input type="text" id="shareUrl" readonly />
       <button id="copyBtn">共有URLをコピー</button>
+    </div>
+
+    <div id="origins">
+      <h4>登録済みサイト</h4>
+      <ul id="originList"></ul>
     </div>
 
     <!-- uploader.js はページへ注入する関数を定義する。popup.js より前に読む。 -->

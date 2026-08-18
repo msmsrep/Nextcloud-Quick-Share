@@ -26,6 +26,41 @@ const showShareUrl = (url) => {
 // （window.confirm はポップアップを閉じてしまうため使わない）
 let pendingTrust = null;
 
+// 登録済みオリジンの一覧を描画する。
+// 値は storage 由来なので textContent で入れる（innerHTML は使わない）。
+const renderOrigins = async () => {
+    const { knownOrigins = [] } = await chrome.storage.sync.get("knownOrigins");
+    const list = $("originList");
+    list.textContent = "";
+    $("origins").style.display = knownOrigins.length ? "block" : "none";
+
+    for (const origin of knownOrigins) {
+        const li = document.createElement("li");
+
+        const label = document.createElement("span");
+        label.textContent = origin;
+        li.appendChild(label);
+
+        const del = document.createElement("button");
+        del.type = "button";
+        del.textContent = "削除";
+        del.title = origin + " の登録を解除";
+        del.addEventListener("click", async () => {
+            const { knownOrigins: current = [] } = await chrome.storage.sync.get("knownOrigins");
+            await chrome.storage.sync.set({
+                knownOrigins: current.filter((o) => o !== origin),
+            });
+            // 削除直後に同じサイトで実行した場合、再度の承認を求める
+            if (pendingTrust === origin) resetTrustPrompt();
+            setStatus("登録を解除しました: " + origin);
+            renderOrigins();
+        });
+        li.appendChild(del);
+
+        list.appendChild(li);
+    }
+};
+
 const resetTrustPrompt = () => {
     pendingTrust = null;
     $("runBtn").textContent = "アップロードする";
@@ -90,23 +125,41 @@ $("runBtn").addEventListener("click", async () => {
 
     if (!detected) {
         resetTrustPrompt();
-        setStatus("Nextcloud のページで実行してください。\n（requesttoken が見つかりませんでした）", "error");
+        setStatus("ページの情報を取得できませんでした。", "error");
         return;
     }
 
-    // 2) 初めてのオリジンなら、パスワードを渡す前に明示的な確認を挟む。
+    // 判定結果は「警告」であって中断理由ではない。Nextcloud らしくないページでも
+    // ユーザーが明示的に承認すれば実行できる（NC 30+ ならトークン無しでも通る）。
+    const warnings = [];
+    if (!detected.hasToken) {
+        warnings.push("requesttoken が見つかりません。Nextcloud のページではない可能性があります。");
+        warnings.push("Nextcloud 30 未満ではトークンが必須のため、この状態では失敗します。");
+    } else if (!detected.loggedIn) {
+        warnings.push("ログイン済みの画面ではないようです（公開共有ページ / ログイン画面）。");
+    }
+
+    // 2) 未登録のオリジンなら、パスワードを渡す前に明示的な確認を挟む。
     const { knownOrigins = [] } = await chrome.storage.sync.get("knownOrigins");
     if (!knownOrigins.includes(detected.origin)) {
         if (pendingTrust !== detected.origin) {
             pendingTrust = detected.origin;
-            $("runBtn").textContent = "このサイトを信頼して続行";
+            $("runBtn").textContent = warnings.length
+                ? "警告を承知で登録して続行"
+                : "このサイトを信頼して続行";
             setStatus(
-                detected.origin + "\nは未登録のサイトです。自分の Nextcloud であることを確認してから、もう一度押してください。",
+                [detected.origin, "は未登録のサイトです。自分の Nextcloud であることを確認してから、もう一度押してください。"]
+                    .concat(warnings.length ? [""].concat(warnings) : [])
+                    .join("\n"),
                 "error"
             );
             return;
         }
         await chrome.storage.sync.set({ knownOrigins: knownOrigins.concat(detected.origin) });
+        renderOrigins();
+    } else if (warnings.length) {
+        // 登録済みオリジンなら中断しない。失敗する可能性だけ伝えて続行する。
+        setStatus(warnings.join("\n"), "error");
     }
     resetTrustPrompt();
 
@@ -117,7 +170,7 @@ $("runBtn").addEventListener("click", async () => {
         const [injection] = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
             func: runUpload,
-            args: [password, expireDate],
+            args: [detected.webroot, password, expireDate],
         });
         describeResult(injection.result);
     } catch (e) {
@@ -142,6 +195,8 @@ $("copyBtn").addEventListener("click", async () => {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     $("expireDate").min = tomorrow.toISOString().slice(0, 10);
+
+    renderOrigins();
 
     // v1.1 では storage.local に置いていた。ディスク上の残骸を掃除する。
     chrome.storage.local.remove("lastResult");

@@ -4,17 +4,64 @@
 // 依存するヘルパは必ず runUpload の内側に入れ子で定義すること。
 
 /**
- * ページが Nextcloud かどうかを判定するだけの関数。
- * パスワードを渡す前段の確認に使うため、引数を取らず副作用も持たない。
+ * ページの素性を調べて返す。判定は行うが、ここでは何もブロックしない。
+ * 続行するかどうかはポップアップ側（ユーザーの明示的な承認）が決める。
+ *
+ * 注意: これは UX 上のガードであってセキュリティ境界ではない。
+ * 任意のサイトが data-requesttoken を名乗れるので、実際の保護は
+ * ポップアップ側のオリジン許可リストが担う。
  */
 function detectNextcloud() {
     const head = document.head;
-    if (!head) return null;
+    if (!head) {
+        return { origin: location.origin, hasToken: false, loggedIn: false, user: null, webroot: "" };
+    }
+
+    // core/templates/layout.*.php が出力する属性。全レイアウトにあるため
+    // 「Nextcloud らしさ」の目安になる。公式の @nextcloud/auth も同じ場所を読む。
     const token = head.getAttribute("data-requesttoken");
-    if (!token) return null;
+
+    // data-user はログイン済みレイアウト (layout.user.php) にしか無い。
+    // 無い場合は公開共有ページ / ログイン画面の可能性が高い。
+    const user = head.getAttribute("data-user");
+
+    // webroot（サブディレクトリ設置）の解決。
+    // head に data-webroot は存在しないため、DOM から推定する。
+    const resolveWebroot = () => {
+        // 旧 Nextcloud / ownCloud は head に持っていることがある
+        const attr = head.getAttribute("data-webroot");
+        if (attr !== null) return attr.replace(/\/$/, "");
+
+        // Nextcloud のアセットは {webroot}/dist/, /core/, /apps/ 配下から読まれる
+        const assets = document.querySelectorAll('script[src], link[rel="stylesheet"][href]');
+        for (const el of assets) {
+            const raw = el.getAttribute("src") || el.getAttribute("href");
+            if (!raw) continue;
+            let path;
+            try {
+                const u = new URL(raw, location.href);
+                if (u.origin !== location.origin) continue;
+                path = u.pathname;
+            } catch { continue; }
+            const m = path.match(/^(.*?)\/(?:dist|core|apps)\//);
+            if (!m) continue;
+            // テーマ CSS などは {webroot}/index.php/apps/... で配信されることがある
+            return m[1].replace(/\/index\.php$/, "");
+        }
+
+        // index.php 経由の URL ならその手前が webroot
+        const idx = location.pathname.indexOf("/index.php/");
+        if (idx >= 0) return location.pathname.slice(0, idx);
+
+        return "";
+    };
+
     return {
-        webroot: head.getAttribute("data-webroot") || "",
         origin: location.origin,
+        hasToken: !!token,
+        loggedIn: !!user,
+        user: user || null,
+        webroot: resolveWebroot(),
     };
 }
 
@@ -22,15 +69,20 @@ function detectNextcloud() {
  * アップロード〜共有リンク作成〜設定反映までの本処理。
  * 例外は投げずに { ok, ... } を返す（executeScript の戻り値は構造化クローン可能な値のみ）。
  */
-function runUpload(password, expireDate) {
+function runUpload(webroot, password, expireDate) {
     return (async () => {
+        // トークンは実行直前に読み直す（セッション更新で差し替わることがある）。
+        // 無い場合も中断しない。NC 30+ なら OCS-APIRequest ヘッダだけで
+        // CSRF チェックを通過できるため、まず試して結果で判断する。
         const head = document.head;
-        const token = head && head.getAttribute("data-requesttoken");
-        if (!token) {
-            return { ok: false, error: "requesttoken が取得できません。Nextcloud のページで実行してください。" };
-        }
-        // サブディレクトリ設置（https://example.com/nextcloud/ など）にも対応する
-        const webroot = (head.getAttribute("data-webroot") || "").replace(/\/$/, "");
+        const token = (head && head.getAttribute("data-requesttoken")) || null;
+
+        // 認証系ヘッダ。トークンがあれば添え、無ければヘッダのみで試す。
+        const authHeaders = () => {
+            const h = { "OCS-APIRequest": "true" };
+            if (token) h["requesttoken"] = token;
+            return h;
+        };
 
         // --- ファイル選択 ---------------------------------------------------
         // change だけでは「キャンセル」時に解決されず処理が止まったままになるため、
@@ -68,6 +120,11 @@ function runUpload(password, expireDate) {
         };
 
         const httpError = (status) => {
+            if (status === 401 && !token) {
+                return "認証エラー (401)。requesttoken の無いページから実行したため、"
+                    + "CSRF チェックに通りませんでした（トークン無しで通るのは Nextcloud 30 以降のみです）。"
+                    + "ログイン済みの Nextcloud 画面で実行してください。";
+            }
             if (status === 401) return "認証エラー (401)。Nextcloud にログインし直してください。";
             if (status === 403) return "権限がありません (403)。";
             if (status === 507) return "サーバの空き容量が不足しています (507)。";
@@ -78,11 +135,11 @@ function runUpload(password, expireDate) {
         // セッション切れではログイン画面の HTML が返るため JSON パースも保護する。
         const ocsFetch = async (path, init) => {
             const options = Object.assign({ credentials: "include" }, init);
-            options.headers = Object.assign({
-                "OCS-APIREQUEST": "true",
-                "Accept": "application/json",
-                "requesttoken": token,
-            }, (init && init.headers) || {});
+            options.headers = Object.assign(
+                { "Accept": "application/json" },
+                authHeaders(),
+                (init && init.headers) || {}
+            );
 
             const res = await fetch(webroot + path, options);
             const text = await res.text();
@@ -110,11 +167,14 @@ function runUpload(password, expireDate) {
                 const res = await fetch(base + encodePath(name), {
                     method: "PUT",
                     credentials: "include",
-                    headers: {
+                    // NC 30+ の passesCSRFCheck() は OCS-APIRequest があれば
+                    // トークン無しでも通る（CORS セーフリスト外のヘッダなので
+                    // クロスオリジンからは付けられない = それ自体が CSRF 防御）。
+                    // NC 30 未満では効かないため requesttoken も併せて送る。
+                    headers: Object.assign({
                         "Content-Type": file.type || "application/octet-stream",
-                        "requesttoken": token,
                         "If-None-Match": "*",
-                    },
+                    }, authHeaders()),
                     body: buffer,
                 });
                 if (res.status === 200 || res.status === 201 || res.status === 204) return name;
