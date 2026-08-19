@@ -82,18 +82,13 @@ const describeResult = (res) => {
 
     const lines = [];
     if (res.renamed) lines.push(`同名ファイルがあったため "${res.name}" として保存しました。`);
-    if (res.settingsError) {
-        lines.push("警告: パスワード / 有効期限を設定できませんでした。");
-        lines.push(res.settingsError);
-        lines.push("リンクは保護されていません。Nextcloud 側で設定を確認してください。");
-        setStatus(lines.join("\n"), "error");
-    } else {
-        lines.push("アップロードと共有設定が完了しました。");
-        if (res.passwordSet) lines.push("・パスワード設定済み");
-        if (res.expireSet) lines.push("・有効期限設定済み");
-        lines.push(res.copied ? "・共有URLをコピーしました" : "・下のボタンでURLをコピーできます");
-        setStatus(lines.join("\n"), "ok");
-    }
+    // パスワードと有効期限は共有リンクの作成時に一緒に渡している。つまりリンクが
+    // 返ってきた時点で設定は入っており、「作れたが無防備」という状態は起きない。
+    lines.push("アップロードと共有設定が完了しました。");
+    if (res.passwordSet) lines.push("・パスワード設定済み");
+    if (res.expireSet) lines.push("・有効期限設定済み");
+    lines.push(res.copied ? "・共有URLをコピーしました" : "・下のボタンでURLをコピーできます");
+    setStatus(lines.join("\n"), "ok");
     if (res.url) showShareUrl(res.url);
 };
 
@@ -170,7 +165,9 @@ $("runBtn").addEventListener("click", async () => {
         const [injection] = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
             func: runUpload,
-            args: [detected.webroot, password, expireDate],
+            // webroot は 1 つに絞らず候補ごと渡す。どれを使うかは注入先が
+            // status.php で確かめて決める（推定を外すと 404 / 405 になるため）。
+            args: [detected.webrootCandidates || [detected.webroot || ""], password, expireDate],
         });
         describeResult(injection.result);
     } catch (e) {

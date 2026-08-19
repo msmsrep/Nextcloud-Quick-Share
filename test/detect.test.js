@@ -68,3 +68,34 @@ test("webroot: 旧 Nextcloud / ownCloud の data-webroot を優先する", () =>
     });
     assert.equal(r.webroot, "/legacy", "末尾スラッシュは落とす");
 });
+
+test("webroot: /index.php/css/ 経由のアセットを webroot と誤認しない（405 の原因）", () => {
+    // Nextcloud は CSS / JS を {webroot}/index.php/css/{app}/... でも配信する。
+    // ここを webroot と誤認すると PUT 先が /index.php/css/remote.php/... になる。
+    assert.equal(detect({ assets: ["/index.php/css/core/css/server.css"] }).webroot, "");
+    assert.equal(detect({ assets: ["/index.php/js/core/merged-template.js"] }).webroot, "");
+    assert.equal(detect({ assets: ["/nc/index.php/css/core/css/server.css"] }).webroot, "/nc");
+});
+
+test("webroot: 候補の最後は必ずルート（空文字）", () => {
+    const r = detect({ assets: ["/nextcloud/dist/core-common.js"] });
+    assert.deepEqual(r.webrootCandidates, ["/nextcloud", ""]);
+});
+
+test("webroot: 候補は確度順に並び、先頭が webroot と一致する", () => {
+    const r = detect({
+        headAttrs: { "data-requesttoken": "T", "data-webroot": "/legacy/" },
+        assets: ["/nextcloud/dist/core-common.js"],
+        pathname: "/other/index.php/apps/files",
+    });
+    assert.equal(r.webroot, r.webrootCandidates[0]);
+    assert.deepEqual(r.webrootCandidates, ["/legacy", "/nextcloud", "/other", ""]);
+});
+
+test("webroot: 重複した候補はまとめる", () => {
+    const r = detect({
+        assets: ["/nc/dist/a.js", "/nc/core/b.js", "/nc/apps/files/c.js"],
+        pathname: "/nc/index.php/apps/files",
+    });
+    assert.deepEqual(r.webrootCandidates, ["/nc", ""]);
+});

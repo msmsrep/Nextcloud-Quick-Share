@@ -7,9 +7,16 @@
 
 ログイン中のセッション（Cookie）と、ページに埋め込まれている `data-requesttoken` をそのまま使うため、URL やアプリパスワードの登録は不要です。
 
+0. `status.php` で Nextcloud の設置場所（webroot）を確定
 1. WebDAV (`PUT /remote.php/webdav/<ファイル名>`) でアップロード
-2. OCS API (`POST /ocs/v2.php/apps/files_sharing/api/v1/shares`) で公開リンクを作成
-3. 同 API の `PUT` でパスワードと有効期限を設定
+2. OCS API (`POST /ocs/v2.php/apps/files_sharing/api/v1/shares`) で公開リンクを作成。
+   **パスワードと有効期限はこの作成リクエストに含めます。**
+
+作成後に `PUT /shares/{id}` で後追い設定はしません。後追いだと設定が入るまでの間
+無防備な公開リンクが実在してしまううえ、OCS の `PUT` は本文が
+`application/x-www-form-urlencoded` のときしかパラメータとして読まれず、
+Nextcloud 側が Content-Type を完全一致で見る実装では `; charset=UTF-8` を添えただけで
+本文が無視され「更新する項目が無い」＝ **400 Bad Request** になるためです。
 
 ## インストール
 
@@ -75,9 +82,17 @@ CSRF チェックを通過できるため、トークンが取れないページ
 （30 未満では 401 になり、その旨をエラーメッセージで案内します）。
 
 webroot（サブディレクトリ設置）は `<head>` からは取れないため（`data-webroot` 属性は
-存在しません）、同一オリジンの `script[src]` / `link[href]` を走査して
-`{webroot}/dist/`・`/core/`・`/apps/` の手前を webroot とみなしています。
-取れない場合は `/index.php/` の手前、それも無ければ空文字（ルート設置）です。
+存在しません）、同一オリジンの `script[src]` / `link[href]` と現在の URL から推定します。
+Nextcloud のパスは webroot の直下が必ず `index.php` / `remote.php` / `dist` / `core` /
+`apps` / `css` / `js` / `ocs` などの決まった名前で始まるので、**最初に現れたそれの手前**を
+webroot とみなします。
+
+ただし推定は外れます（例: `{webroot}/index.php/css/core/css/server.css` の `/core/` だけを
+見て webroot を `/index.php/css` と誤認する）。誤った webroot のまま PUT すると
+`/index.php/css/remote.php/webdav/...` のような URL になり **405 Method Not Allowed** で
+失敗します。そこで推定は 1 つに絞らず候補を確度順に並べ（末尾は必ずルート設置の空文字）、
+アップロード直前に `{候補}/status.php` を叩いて Nextcloud の JSON が返る候補を採用します。
+status.php を塞いでいる環境では従来どおり先頭の候補で実行します。
 
 ## CSRF 対策との関係
 

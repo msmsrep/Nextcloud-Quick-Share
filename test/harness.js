@@ -127,6 +127,10 @@ function makeEnv(opts = {}) {
     };
 
     const defaultHandler = (call) => {
+        // webroot の実在確認。既定では「どの webroot でも Nextcloud がいる」ことにする。
+        if (call.url.endsWith("/status.php")) {
+            return { status: 200, body: { installed: true, version: "30.0.0.0", productname: "Nextcloud" } };
+        }
         if (call.method === "PUT" && call.url.includes("/remote.php/webdav/")) {
             return { status: 201, body: "" };
         }
