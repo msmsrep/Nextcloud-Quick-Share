@@ -187,11 +187,25 @@ $("copyBtn").addEventListener("click", async () => {
     }
 });
 
+// <input type="date"> に入れる YYYY-MM-DD。
+// toISOString() は UTC に直してしまうため使わない（JST の朝は前日になる）。
+const ymd = (date) => {
+    const pad = (n) => String(n).padStart(2, "0");
+    return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate());
+};
+
 (async function init() {
-    // 過去日は Nextcloud 側で拒否されるため、明日以降しか選べないようにする。
+    // 明日以降しか選べないようにする。当日は実サーバで拒否されたため許可しない
+    // （Nextcloud は指定日を丸めてから今日の 0:00 と比較する。丸め先が 0:00 の
+    // バージョンでは当日が「期限が過去です」になる）。
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
-    $("expireDate").min = tomorrow.toISOString().slice(0, 10);
+
+    const inAWeek = new Date();
+    inAWeek.setDate(inAWeek.getDate() + 7); // 月またぎ / 年またぎは Date が面倒を見る
+
+    $("expireDate").min = ymd(tomorrow);
+    $("expireDate").value = ymd(inAWeek); // 既定は 1 週間後
 
     renderOrigins();
 
