@@ -82,18 +82,13 @@ const describeResult = (res) => {
 
     const lines = [];
     if (res.renamed) lines.push(`同名ファイルがあったため "${res.name}" として保存しました。`);
-    if (res.settingsError) {
-        lines.push("警告: パスワード / 有効期限を設定できませんでした。");
-        lines.push(res.settingsError);
-        lines.push("リンクは保護されていません。Nextcloud 側で設定を確認してください。");
-        setStatus(lines.join("\n"), "error");
-    } else {
-        lines.push("アップロードと共有設定が完了しました。");
-        if (res.passwordSet) lines.push("・パスワード設定済み");
-        if (res.expireSet) lines.push("・有効期限設定済み");
-        lines.push(res.copied ? "・共有URLをコピーしました" : "・下のボタンでURLをコピーできます");
-        setStatus(lines.join("\n"), "ok");
-    }
+    // パスワードと有効期限は共有リンクの作成時に一緒に渡している。つまりリンクが
+    // 返ってきた時点で設定は入っており、「作れたが無防備」という状態は起きない。
+    lines.push("アップロードと共有設定が完了しました。");
+    if (res.passwordSet) lines.push("・パスワード設定済み");
+    if (res.expireSet) lines.push("・有効期限設定済み");
+    lines.push(res.copied ? "・共有URLをコピーしました" : "・下のボタンでURLをコピーできます");
+    setStatus(lines.join("\n"), "ok");
     if (res.url) showShareUrl(res.url);
 };
 
@@ -170,7 +165,9 @@ $("runBtn").addEventListener("click", async () => {
         const [injection] = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
             func: runUpload,
-            args: [detected.webroot, password, expireDate],
+            // webroot は 1 つに絞らず候補ごと渡す。どれを使うかは注入先が
+            // status.php で確かめて決める（推定を外すと 404 / 405 になるため）。
+            args: [detected.webrootCandidates || [detected.webroot || ""], password, expireDate],
         });
         describeResult(injection.result);
     } catch (e) {
@@ -190,11 +187,25 @@ $("copyBtn").addEventListener("click", async () => {
     }
 });
 
+// <input type="date"> に入れる YYYY-MM-DD。
+// toISOString() は UTC に直してしまうため使わない（JST の朝は前日になる）。
+const ymd = (date) => {
+    const pad = (n) => String(n).padStart(2, "0");
+    return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate());
+};
+
 (async function init() {
-    // 過去日は Nextcloud 側で拒否されるため、明日以降しか選べないようにする。
+    // 明日以降しか選べないようにする。当日は実サーバで拒否されたため許可しない
+    // （Nextcloud は指定日を丸めてから今日の 0:00 と比較する。丸め先が 0:00 の
+    // バージョンでは当日が「期限が過去です」になる）。
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
-    $("expireDate").min = tomorrow.toISOString().slice(0, 10);
+
+    const inAWeek = new Date();
+    inAWeek.setDate(inAWeek.getDate() + 7); // 月またぎ / 年またぎは Date が面倒を見る
+
+    $("expireDate").min = ymd(tomorrow);
+    $("expireDate").value = ymd(inAWeek); // 既定は 1 週間後
 
     renderOrigins();
 

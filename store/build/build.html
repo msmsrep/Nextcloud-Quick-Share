@@ -10,6 +10,9 @@ const NAVY = "#18193F";
 const AMBER = "#F2C57C";
 const CREAM = "#FAF3E8";
 
+// ポップアップの実寸幅。src/popup.html の body { width } と揃えること。
+const POPUP_W = 300;
+
 const log = (m) => { document.getElementById("log").textContent = m; };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -109,24 +112,34 @@ async function capturePopup(scenario, tweak) {
 
 // ポップアップの CSS は :root にライトとダークの両方を定義している。
 // ストア画像はライト固定にしたいので、ラッパー側で変数を上書きする。
+// 値は src/popup.html の :root（ライト側）と揃えること。
 const LIGHT_OVERRIDE = `
   .nqs-popup{
     /* input や button のネイティブ描画もライトに固定する
        （継承プロパティなので子孫の UA スタイルにも効く） */
     color-scheme: light;
-    --fg:#222; --bg:#fff; --muted:#666; --ok:#0b6b2f; --err:#b00020; --border:#ddd;
-    font-family:sans-serif; width:280px; margin:0; padding:12px;
+    --fg:#18193F; --bg:#fff; --tint:#FAF3E8; --muted:#45466A;
+    --border:#DDD2BD; --field:#9C8A6B; --accent:#D99B2B; --accent-fill:#F2C57C;
+    --ring:rgba(217,155,43,.45);
+    --primary:#18193F; --primary-fg:#fff; --primary-hover:#2A2B5C;
+    --ok:#0A5C29; --ok-bg:rgba(10,92,41,.08);
+    --err:#A3001D; --err-bg:rgba(163,0,29,.08);
+    font-family:"Segoe UI",Meiryo,"Hiragino Sans","Noto Sans JP",sans-serif;
+    font-size:14px; line-height:1.6; width:300px; margin:0; padding:0;
     background:var(--bg); color:var(--fg);
-    border-radius:10px; box-shadow:0 18px 50px rgba(24,25,63,.22);
+    /* ヘッダーが端まで届くデザインなので、角丸で切り抜く */
+    border-radius:10px; overflow:hidden; box-shadow:0 18px 50px rgba(24,25,63,.22);
   }`;
 
 function composition({ w, h, title, lead, popup }) {
-    // 縦にはみ出して切れないよう、実寸の高さから拡大率を決める
-    const scale = Math.min(1.65, (h * 0.88) / popup.height);
-
     // 小さい規格では文字列中の強制改行が効きすぎて行数が増え、
     // 左下のアイコンに文章が重なる。小さいときは自然改行に任せる。
     const small = w < 900;
+
+    // 縦にはみ出して切れないよう、実寸の高さから拡大率を決める。
+    // 小さい規格では拡大しすぎるとポップアップが横幅を食って見出しに重なるため、
+    // 上限を下げて本文の列を確保する。
+    const scale = Math.min(small ? 1.15 : 1.5, (h * 0.88) / popup.height);
     if (small) {
         const unwrap = (s) => s.replace(/<br\s*\/?>/g, " ");
         title = unwrap(title);
@@ -146,14 +159,18 @@ function composition({ w, h, title, lead, popup }) {
   <circle cx="${cx}" cy="${cy}" r="${r}" fill="${AMBER}" opacity="0.18"/>
   ${embedIcon(iconX, iconY, iconSize)}
   <foreignObject x="0" y="0" width="${w}" height="${h}">
-    <div xmlns="http://www.w3.org/1999/xhtml" style="width:${w}px;height:${h}px;box-sizing:border-box;display:flex;align-items:center;gap:${w * 0.05}px;padding:0 ${w * 0.07}px;font-family:sans-serif">
+    <div xmlns="http://www.w3.org/1999/xhtml" style="width:${w}px;height:${h}px;box-sizing:border-box;display:flex;align-items:center;gap:${w * 0.05}px;padding:0 ${w * 0.06}px;font-family:sans-serif">
       <style>${popup.css}${LIGHT_OVERRIDE}</style>
       <div style="flex:1;min-width:0">
-        <div style="font-size:${Math.round(w * 0.037)}px;line-height:1.35;font-weight:700;color:${NAVY};letter-spacing:.01em">${title}</div>
+        <div style="font-size:${Math.round(w * 0.035)}px;line-height:1.35;font-weight:700;color:${NAVY};letter-spacing:.01em">${title}</div>
         <div style="margin-top:${Math.round(h * 0.035)}px;font-size:${Math.round(w * 0.0165)}px;line-height:1.8;color:#4a4b6a">${lead}</div>
       </div>
-      <div style="flex:none;transform:scale(${scale});transform-origin:center right">
-        <div class="nqs-popup">${popup.html}</div>
+      <!-- transform はレイアウトを変えないので、拡大後の幅を持つ箱で場所を確保する。
+           これが無いと拡大したポップアップが左の見出しに重なる。 -->
+      <div style="flex:none;width:${Math.round(POPUP_W * scale)}px;display:flex;justify-content:flex-end">
+        <div style="transform:scale(${scale});transform-origin:center right">
+          <div class="nqs-popup">${popup.html}</div>
+        </div>
       </div>
     </div>
   </foreignObject>

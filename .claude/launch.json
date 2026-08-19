@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "popup-ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "test:ui"],
+      "port": 8731
+    },
+    {
+      "name": "store-build",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "build:store"],
+      "port": 8733
+    }
+  ]
+}

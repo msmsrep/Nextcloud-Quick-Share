@@ -3,13 +3,23 @@
 開いている Nextcloud のページからファイルをアップロードし、パスワード付き・期限付きの
 公開共有リンクを作成して URL をクリップボードにコピーする Edge / Chrome 拡張機能です。
 
+Edgeストアで公開しています：
+[Nextcloud-Quick-Share](https://microsoftedge.microsoft.com/addons/detail/nextcloudquickshare/kcgolhlghbhikipkbjeddmfijdningme)
+
 ## 仕組み
 
 ログイン中のセッション（Cookie）と、ページに埋め込まれている `data-requesttoken` をそのまま使うため、URL やアプリパスワードの登録は不要です。
 
+0. `status.php` で Nextcloud の設置場所（webroot）を確定
 1. WebDAV (`PUT /remote.php/webdav/<ファイル名>`) でアップロード
-2. OCS API (`POST /ocs/v2.php/apps/files_sharing/api/v1/shares`) で公開リンクを作成
-3. 同 API の `PUT` でパスワードと有効期限を設定
+2. OCS API (`POST /ocs/v2.php/apps/files_sharing/api/v1/shares`) で公開リンクを作成。
+   **パスワードと有効期限はこの作成リクエストに含めます。**
+
+作成後に `PUT /shares/{id}` で後追い設定はしません。後追いだと設定が入るまでの間
+無防備な公開リンクが実在してしまううえ、OCS の `PUT` は本文が
+`application/x-www-form-urlencoded` のときしかパラメータとして読まれず、
+Nextcloud 側が Content-Type を完全一致で見る実装では `; charset=UTF-8` を添えただけで
+本文が無視され「更新する項目が無い」＝ **400 Bad Request** になるためです。
 
 ## インストール
 
@@ -22,6 +32,9 @@
 1. 自分の Nextcloud を開き、ログインした状態にする
 2. ツールバーの拡張機能アイコンを押す
 3. 必要ならパスワードと有効期限を入力し、「アップロードする」を押す
+   - 有効期限の既定値は **1 週間後**。空欄にすれば無期限になります
+   - 選べるのは **翌日以降**です。当日は Nextcloud が「期限が過去です」として
+     拒否することがあるため、入力欄の時点で弾いています
 4. ファイルを選ぶとアップロードされ、共有 URL がクリップボードにコピーされる
 
 初めて使うサイトでは確認のためもう一度ボタンを押す必要があります。承認したオリジンは
@@ -52,12 +65,38 @@ Nextcloud と判定できないページでも、**警告を確認したうえ�
 | `manifest.json` | MV3 マニフェスト（`content_scripts` は使わない） |
 | `icon/icon.svg` | アイコンの原本。PNG はここから書き出す |
 | `icon/icon-{16,32,48,128}.png` | マニフェストで参照する実体 |
-| `src/popup.html` | 入力 UI |
+| `src/popup.html` | 入力 UI（配色はアイコンと共通。下記参照） |
 | `src/popup.js` | タブ判定・注入・結果表示 |
 | `src/uploader.js` | ページへ注入される `detectNextcloud` / `runUpload` |
 | `test/harness.js` | uploader.js を Node で動かすためのフェイク環境 |
 | `test/*.test.js` | 自動テスト（`npm test`） |
 | `test/ui/` | ポップアップ UI の手動確認用サーバーとスタブ（`npm run test:ui`） |
+
+## 配色
+
+ポップアップ・アイコン・ストア掲載画像は同じ 3 色でそろえています。
+
+| 役割 | 色 | 使いどころ |
+| --- | --- | --- |
+| ネイビー | `#18193F` | アイコンのライン画、本文、明るいテーマの主ボタン |
+| アンバー（面） | `#F2C57C` | アイコンのパステル面、暗いテーマの主ボタン |
+| アンバー（線） | `#D99B2B` | フォーカスリング。細い線や文字は面用より濃くする |
+| クリーム | `#FAF3E8` | ヘッダー帯、補助的な面、ストア画像の背景 |
+
+ポップアップの実体は `src/popup.html` の `:root` にある CSS 変数です。
+暗いテーマではネイビーを背景に回し、アンバーを主役の色にします。
+
+視認性のために決めていること。
+
+- 本文・ラベル・状態表示の文字は常に `--fg`。成功や失敗は文字色ではなく
+  左の線と下地の色で示す（緑や赤の文字を並べるより読みやすい）
+- 入力欄の枠 `--field` は仕切り線 `--border` より濃くして、背景との比 3:1 以上
+- 和文は Meiryo を優先する。`Yu Gothic UI` は小さい字で線が細く読みにくい
+- 文字色と下地の組み合わせはすべて WCAG AA (4.5:1) 以上を確認済み
+
+ストア掲載画像はポップアップを明るいテーマ固定で描画するため、
+`store/build/build.html` の `LIGHT_OVERRIDE` に同じ値を書いてあります。
+**`:root` を変えたらこちらも合わせて更新し、`npm run build:store` をやり直してください。**
 
 ## 判定と webroot の推定について
 
@@ -75,9 +114,17 @@ CSRF チェックを通過できるため、トークンが取れないページ
 （30 未満では 401 になり、その旨をエラーメッセージで案内します）。
 
 webroot（サブディレクトリ設置）は `<head>` からは取れないため（`data-webroot` 属性は
-存在しません）、同一オリジンの `script[src]` / `link[href]` を走査して
-`{webroot}/dist/`・`/core/`・`/apps/` の手前を webroot とみなしています。
-取れない場合は `/index.php/` の手前、それも無ければ空文字（ルート設置）です。
+存在しません）、同一オリジンの `script[src]` / `link[href]` と現在の URL から推定します。
+Nextcloud のパスは webroot の直下が必ず `index.php` / `remote.php` / `dist` / `core` /
+`apps` / `css` / `js` / `ocs` などの決まった名前で始まるので、**最初に現れたそれの手前**を
+webroot とみなします。
+
+ただし推定は外れます（例: `{webroot}/index.php/css/core/css/server.css` の `/core/` だけを
+見て webroot を `/index.php/css` と誤認する）。誤った webroot のまま PUT すると
+`/index.php/css/remote.php/webdav/...` のような URL になり **405 Method Not Allowed** で
+失敗します。そこで推定は 1 つに絞らず候補を確度順に並べ（末尾は必ずルート設置の空文字）、
+アップロード直前に `{候補}/status.php` を叩いて Nextcloud の JSON が返る候補を採用します。
+status.php を塞いでいる環境では従来どおり先頭の候補で実行します。
 
 ## CSRF 対策との関係
 

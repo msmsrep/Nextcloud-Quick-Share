@@ -14,7 +14,10 @@
 function detectNextcloud() {
     const head = document.head;
     if (!head) {
-        return { origin: location.origin, hasToken: false, loggedIn: false, user: null, webroot: "" };
+        return {
+            origin: location.origin, hasToken: false, loggedIn: false, user: null,
+            webroot: "", webrootCandidates: [""],
+        };
     }
 
     // core/templates/layout.*.php が出力する属性。全レイアウトにあるため
@@ -26,42 +29,59 @@ function detectNextcloud() {
     const user = head.getAttribute("data-user");
 
     // webroot（サブディレクトリ設置）の解決。
-    // head に data-webroot は存在しないため、DOM から推定する。
-    const resolveWebroot = () => {
-        // 旧 Nextcloud / ownCloud は head に持っていることがある
-        const attr = head.getAttribute("data-webroot");
-        if (attr !== null) return attr.replace(/\/$/, "");
+    // head に data-webroot は無いことが多いので DOM と URL から推定するが、
+    // 1 つに決め打ちすると外したときに見当違いの URL へ PUT してしまう
+    // （例: {webroot}/index.php/css/core/... を読んで webroot を
+    // 「/index.php/css」と誤認する）。ここでは候補を確度順に並べるだけにして、
+    // 実際に使う 1 つは runUpload が status.php で確かめてから決める。
 
-        // Nextcloud のアセットは {webroot}/dist/, /core/, /apps/ 配下から読まれる
-        const assets = document.querySelectorAll('script[src], link[rel="stylesheet"][href]');
-        for (const el of assets) {
-            const raw = el.getAttribute("src") || el.getAttribute("href");
-            if (!raw) continue;
-            let path;
-            try {
-                const u = new URL(raw, location.href);
-                if (u.origin !== location.origin) continue;
-                path = u.pathname;
-            } catch { continue; }
-            const m = path.match(/^(.*?)\/(?:dist|core|apps)\//);
-            if (!m) continue;
-            // テーマ CSS などは {webroot}/index.php/apps/... で配信されることがある
-            return m[1].replace(/\/index\.php$/, "");
-        }
+    // webroot の直下に生える Nextcloud のパス。アセットもページの URL も必ず
+    // このいずれかで始まるので、最初に現れた位置の手前が webroot になる。
+    const NC_ENTRY = /\/(?:index\.php|remote\.php|status\.php|public\.php|cron\.php|ocs|ocs-provider|dist|core|apps|css|js|settings|login|logout|s|f|u|call)(?:\/|$)/;
 
-        // index.php 経由の URL ならその手前が webroot
-        const idx = location.pathname.indexOf("/index.php/");
-        if (idx >= 0) return location.pathname.slice(0, idx);
-
-        return "";
+    const cutAtEntry = (path) => {
+        const m = NC_ENTRY.exec(path);
+        return m ? path.slice(0, m.index) : null;
     };
+
+    const candidates = [];
+    const addCandidate = (value) => {
+        if (value === null || value === undefined) return;
+        const root = String(value).replace(/\/+$/, "");
+        if (!candidates.includes(root)) candidates.push(root);
+    };
+
+    // 1) 旧 Nextcloud / ownCloud は head に持っていることがある
+    addCandidate(head.getAttribute("data-webroot"));
+
+    // 2) Nextcloud のアセットは webroot 直下から配信される
+    const assets = document.querySelectorAll('script[src], link[rel="stylesheet"][href]');
+    for (const el of assets) {
+        const raw = el.getAttribute("src") || el.getAttribute("href");
+        if (!raw) continue;
+        let path;
+        try {
+            const u = new URL(raw, location.href);
+            if (u.origin !== location.origin) continue;
+            path = u.pathname;
+        } catch { continue; }
+        addCandidate(cutAtEntry(path));
+    }
+
+    // 3) 今開いているページ自身の URL
+    addCandidate(cutAtEntry(location.pathname));
+
+    // 4) 最後の砦。ルート設置が最も多い。
+    addCandidate("");
 
     return {
         origin: location.origin,
         hasToken: !!token,
         loggedIn: !!user,
         user: user || null,
-        webroot: resolveWebroot(),
+        // 従来どおりの単一値（最有力候補）。実際の決定は runUpload 側で行う。
+        webroot: candidates[0],
+        webrootCandidates: candidates,
     };
 }
 
@@ -69,8 +89,16 @@ function detectNextcloud() {
  * アップロード〜共有リンク作成〜設定反映までの本処理。
  * 例外は投げずに { ok, ... } を返す（executeScript の戻り値は構造化クローン可能な値のみ）。
  */
-function runUpload(webroot, password, expireDate) {
+function runUpload(webrootCandidates, password, expireDate) {
     return (async () => {
+        // ポップアップからは webroot の候補が確度順の配列で渡る。
+        // 文字列で渡された場合（旧シグネチャ）も受け付ける。
+        const roots = Array.isArray(webrootCandidates)
+            ? webrootCandidates.slice()
+            : [webrootCandidates || ""];
+        if (!roots.includes("")) roots.push(""); // ルート設置は常に最後の砦
+        // 確定前の暫定値。resolveWebroot() が実際に使う値へ差し替える。
+        let webroot = roots[0];
         // トークンは実行直前に読み直す（セッション更新で差し替わることがある）。
         // 無い場合も中断しない。NC 30+ なら OCS-APIRequest ヘッダだけで
         // CSRF チェックを通過できるため、まず試して結果で判断する。
@@ -127,7 +155,12 @@ function runUpload(webroot, password, expireDate) {
             }
             if (status === 401) return "認証エラー (401)。Nextcloud にログインし直してください。";
             if (status === 403) return "権限がありません (403)。";
+            if (status === 400) return "リクエストを受け付けてもらえませんでした (400)。";
             if (status === 507) return "サーバの空き容量が不足しています (507)。";
+            if (status === 404 || status === 405) {
+                return "URL が Nextcloud の WebDAV ではありませんでした (" + status + ")。"
+                    + "インストール先（webroot）を特定できていない可能性があります。";
+            }
             return "HTTP " + status;
         };
 
@@ -157,6 +190,36 @@ function runUpload(webroot, password, expireDate) {
             return json.ocs.data;
         };
 
+        // --- 0) webroot の確定 ------------------------------------------------
+        // 候補は DOM からの推定なので外すことがある。誤った webroot のまま PUT すると
+        // 見当違いの URL（例: /index.php/css/remote.php/webdav/...）へ飛んで
+        // 404 / 405 になるため、送信前に status.php で実在を確かめる。
+        // status.php は未ログインでも JSON を返す Nextcloud の素性表明エンドポイント。
+        const isNextcloudRoot = async (root) => {
+            let res;
+            try {
+                res = await fetch(root + "/status.php", {
+                    credentials: "omit", // 素性確認だけなので Cookie は送らない
+                    headers: { "Accept": "application/json" },
+                });
+            } catch { return false; }
+            if (res.status !== 200) return false;
+            let json;
+            try {
+                json = JSON.parse(await res.text());
+            } catch { return false; } // 別アプリの 200 や SPA の index.html を弾く
+            if (!json || typeof json !== "object") return false;
+            return json.installed !== undefined || typeof json.version === "string";
+        };
+
+        const resolveWebroot = async () => {
+            for (const root of roots) {
+                if (await isNextcloudRoot(root)) return root;
+            }
+            // status.php を塞いでいる環境もある。その場合は最有力候補のまま進む。
+            return roots[0];
+        };
+
         // --- 1) WebDAV へアップロード ---------------------------------------
         // If-None-Match: * で既存ファイルの無言上書きを防ぎ、412 が返ったら
         // 連番を付けて再試行する。
@@ -179,34 +242,33 @@ function runUpload(webroot, password, expireDate) {
                 });
                 if (res.status === 200 || res.status === 201 || res.status === 204) return name;
                 if (res.status === 412) continue; // 同名ファイルあり → 別名で再試行
-                throw new Error("アップロードに失敗しました: " + httpError(res.status));
+                throw new Error("アップロードに失敗しました: " + httpError(res.status)
+                    + "\n宛先: " + base + encodePath(name));
             }
             throw new Error("同名ファイルが多すぎるため、別名を決められませんでした。");
         };
 
-        // --- 2) 公開共有リンクを作成 -----------------------------------------
+        // --- 2) 公開共有リンクを作成（パスワード / 有効期限もここで渡す）-------
+        // 作成してから PUT /shares/{id} で後追い設定はしない。理由は 2 つある。
+        //
+        // 1. 後追いだと「無防備な公開リンクが実在する瞬間」ができてしまう。
+        // 2. OCS の PUT は本文が x-www-form-urlencoded のときだけパラメータとして
+        //    読まれるが、Nextcloud の Request は Content-Type を完全一致で見る
+        //    実装があり、"; charset=UTF-8" を添えただけで本文が無視される。
+        //    その結果「更新する項目が無い」と判断されて 400 になる。
+        //    作成時の POST(multipart) なら PHP が普通に解釈するので踏まない。
+        //
+        // 空欄の項目は送らない（空文字を送るとサーバ設定によってはエラーになる）。
         const createShare = (remoteName) => {
             const form = new FormData();
             form.append("path", "/" + remoteName);
             form.append("shareType", "3");   // public link
             form.append("permissions", "1"); // read only
+            if (password) form.append("password", password);
+            if (expireDate) form.append("expireDate", expireDate);
             return ocsFetch("/ocs/v2.php/apps/files_sharing/api/v1/shares?format=json", {
                 method: "POST",
                 body: form,
-            });
-        };
-
-        // --- 3) パスワード / 有効期限を設定 ----------------------------------
-        // 空欄の項目は送らない（空文字を送るとサーバ設定によってはエラーになる）。
-        const updateShare = (shareId) => {
-            const params = new URLSearchParams();
-            if (password) params.set("password", password);
-            if (expireDate) params.set("expireDate", expireDate);
-            if (Array.from(params.keys()).length === 0) return null;
-            return ocsFetch("/ocs/v2.php/apps/files_sharing/api/v1/shares/" + encodeURIComponent(shareId) + "?format=json", {
-                method: "PUT",
-                headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-                body: params.toString(),
             });
         };
 
@@ -248,17 +310,27 @@ function runUpload(webroot, password, expireDate) {
             const file = await pickFile();
             if (!file) return { ok: false, cancelled: true };
 
-            const remoteName = await putFile(file, await file.arrayBuffer());
-            const share = await createShare(remoteName);
-            const shareUrl = share.url;
+            // 通信はここから。キャンセル時に status.php も叩かないよう順序を守る。
+            webroot = await resolveWebroot();
 
-            let settingsError = null;
+            const remoteName = await putFile(file, await file.arrayBuffer());
+
+            let share;
             try {
-                await updateShare(share.id);
+                share = await createShare(remoteName);
             } catch (e) {
-                // 共有自体は作成済み。パスワード未設定のまま「完了」と伝えないよう記録する。
-                settingsError = e && e.message ? e.message : String(e);
+                // ここで失敗しても公開リンクは 1 つも作られていない（安全側）。
+                // ただしファイルは既に置かれているので、それは正直に伝える。
+                const detail = (e && e.message) ? e.message : String(e);
+                throw new Error(
+                    "「" + remoteName + "」のアップロードは成功しましたが、共有リンクを作成できませんでした: " + detail
+                    + ((password || expireDate)
+                        ? "\nパスワード / 有効期限がサーバの設定（パスワードポリシーや期限の上限）に"
+                          + "合わない可能性があります。空欄にして試すと切り分けられます。"
+                        : "")
+                );
             }
+            const shareUrl = share.url;
 
             let copied = false;
             try {
@@ -267,12 +339,7 @@ function runUpload(webroot, password, expireDate) {
                 copied = true;
             } catch { /* コピー失敗はリンク表示でフォローする */ }
 
-            toast(
-                settingsError
-                    ? "共有リンクは作成しましたが、設定の反映に失敗しました: " + settingsError
-                    : (copied ? "共有リンクをコピーしました" : "共有リンクを作成しました"),
-                shareUrl
-            );
+            toast(copied ? "共有リンクをコピーしました" : "共有リンクを作成しました", shareUrl);
 
             return remember({
                 ok: true,
@@ -280,9 +347,9 @@ function runUpload(webroot, password, expireDate) {
                 name: remoteName,
                 renamed: remoteName !== file.name,
                 copied,
-                settingsError,
-                passwordSet: !!password && !settingsError,
-                expireSet: !!expireDate && !settingsError,
+                // 作成時に一緒に渡しているので、共有が作れた = 設定も入っている。
+                passwordSet: !!password,
+                expireSet: !!expireDate,
             });
         } catch (e) {
             const message = e && e.message ? e.message : String(e);

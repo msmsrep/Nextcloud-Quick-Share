@@ -18,9 +18,10 @@ async function run(opts = {}, args = {}) {
 
 const put = (env) => callsMatching(env, "PUT", "/remote.php/webdav/");
 const createShare = (env) => callsMatching(env, "POST", "/shares");
+// 後追い設定の PUT。廃止したので「1 本も出ていないこと」の確認に使う。
 const updateShare = (env) => env.calls.filter((c) => c.method === "PUT" && /\/shares\/\d+/.test(c.url));
 
-test("正常系: アップロード → 共有作成 → 設定 → クリップボード", async () => {
+test("正常系: アップロード → 共有作成（設定込み）→ クリップボード", async () => {
     const { result, env } = await run({}, { password: "pw", expireDate: "2026-12-31" });
 
     assert.equal(result.ok, true);
@@ -28,14 +29,24 @@ test("正常系: アップロード → 共有作成 → 設定 → クリップ
     assert.equal(result.name, "report.pdf");
     assert.equal(result.renamed, false);
     assert.equal(result.copied, true);
-    assert.equal(result.settingsError, null);
     assert.equal(result.passwordSet, true);
     assert.equal(result.expireSet, true);
     assert.equal(env.copied, "https://cloud.example.com/s/TOKEN");
 
     assert.equal(put(env).length, 1);
     assert.equal(createShare(env).length, 1);
-    assert.equal(updateShare(env).length, 1);
+    assert.equal(updateShare(env).length, 0, "後追いの PUT は送らない");
+});
+
+test("パスワードと有効期限は共有作成時に一緒に送る（無防備な瞬間を作らない）", async () => {
+    const { env } = await run({}, { password: "pw", expireDate: "2026-12-31" });
+
+    const body = createShare(env)[0].body;
+    assert.equal(body.get("shareType"), "3");
+    assert.equal(body.get("permissions"), "1");
+    assert.equal(body.get("password"), "pw");
+    assert.equal(body.get("expireDate"), "2026-12-31");
+    assert.equal(updateShare(env).length, 0);
 });
 
 test("ファイル名を URL エンコードする（# や空白や日本語で壊れない）", async () => {
@@ -133,35 +144,40 @@ test("セッション切れでログイン HTML が返っても JSON パース�
     assert.match(result.error, /JSON/);
 });
 
-test("パスワードも期限も未入力なら設定リクエストを送らない", async () => {
+test("パスワードも期限も未入力なら共有作成にも含めない", async () => {
     const { result, env } = await run({}, { password: "", expireDate: "" });
 
     assert.equal(result.ok, true);
-    assert.equal(updateShare(env).length, 0, "空の値を送るとサーバ設定によっては失敗する");
+    const body = createShare(env)[0].body;
+    assert.equal(body.get("password"), null, "空の値を送るとサーバ設定によっては失敗する");
+    assert.equal(body.get("expireDate"), null);
+    assert.equal(updateShare(env).length, 0);
     assert.equal(result.passwordSet, false);
     assert.equal(result.expireSet, false);
 });
 
-test("入力された項目だけを設定リクエストに含める", async () => {
+test("入力された項目だけを共有作成リクエストに含める", async () => {
     const { env } = await run({}, { password: "secret", expireDate: "" });
 
-    const body = updateShare(env)[0].body;
-    assert.match(body, /password=secret/);
-    assert.ok(!body.includes("expireDate"), "未入力の項目は送らない");
+    const body = createShare(env)[0].body;
+    assert.equal(body.get("password"), "secret");
+    assert.equal(body.get("expireDate"), null, "未入力の項目は送らない");
 });
 
-test("設定の反映に失敗したら ok でも settingsError を立てる（成功と誤報しない）", async () => {
-    const { result } = await run({
+test("パスワードが弾かれたら共有リンクを作らずに失敗する（無防備なリンクを残さない）", async () => {
+    const { result, env } = await run({
         handler: (call) => {
+            if (call.url.endsWith("/status.php")) return { status: 404, body: "" };
             if (call.method === "PUT" && call.url.includes("webdav")) return { status: 201, body: "" };
-            if (call.method === "POST") return ocsOk({ id: 9, url: "https://cloud.example.com/s/Y" });
-            return ocsFail(403, "Password policy violated");
+            return ocsFail(400, "Password policy violated");
         },
     }, { password: "weak" });
 
-    assert.equal(result.ok, true, "共有リンク自体は作成済み");
-    assert.match(result.settingsError, /Password policy/);
-    assert.equal(result.passwordSet, false, "パスワード設定済みと表示してはいけない");
+    assert.equal(result.ok, false, "保護されていないリンクを作って成功と言ってはいけない");
+    assert.match(result.error, /Password policy/);
+    assert.match(result.error, /report\.pdf/, "アップロード済みであることを伝える");
+    assert.match(result.error, /パスワード/);
+    assert.equal(updateShare(env).length, 0);
 });
 
 test("ファイル選択をキャンセルしても固まらず cancelled を返す", async () => {
@@ -194,4 +210,80 @@ test("アップロード失敗時は共有を作らない", async () => {
     assert.equal(result.ok, false);
     assert.match(result.error, /507/);
     assert.equal(createShare(env).length, 0);
+});
+
+test("webroot: 候補を status.php で検証してから使う（推定を外しても復帰できる）", async () => {
+    const { result, env } = await run({
+        handler: (call) => {
+            // 実体はルート設置。誤検出した候補の下に status.php は無い。
+            if (call.url.endsWith("/status.php")) {
+                return call.url === "/status.php"
+                    ? { status: 200, body: { installed: true, version: "30.0.0.0" } }
+                    : { status: 404, body: "not found" };
+            }
+            if (call.method === "PUT" && call.url.includes("/remote.php/webdav/")) return { status: 201, body: "" };
+            if (call.method === "POST") return ocsOk({ id: 1, url: "https://cloud.example.com/s/Z" });
+            return ocsOk({ id: 1 });
+        },
+    }, { webroot: ["/index.php/css", ""] });
+
+    assert.equal(result.ok, true);
+    assert.equal(put(env)[0].url, "/remote.php/webdav/report.pdf");
+    assert.ok(
+        !env.calls.some((c) => c.method === "PUT" && c.url.startsWith("/index.php/css")),
+        "検証に失敗した候補へは送らない"
+    );
+    assert.ok(createShare(env)[0].url.startsWith("/ocs/"), "OCS も確定した webroot を使う");
+});
+
+test("webroot: status.php が 200 でも Nextcloud の JSON でなければ採用しない", async () => {
+    const { result, env } = await run({
+        handler: (call) => {
+            if (call.url.endsWith("/status.php")) {
+                // 前段のリバースプロキシや別アプリが 200 + HTML を返すことがある
+                return call.url === "/status.php"
+                    ? { status: 200, body: { installed: true, version: "30.0.0.0" } }
+                    : { status: 200, body: "<!DOCTYPE html><html>hello</html>" };
+            }
+            if (call.method === "PUT" && call.url.includes("/remote.php/webdav/")) return { status: 201, body: "" };
+            if (call.method === "POST") return ocsOk({ id: 3, url: "https://cloud.example.com/s/V" });
+            return ocsOk({ id: 3 });
+        },
+    }, { webroot: ["/wrong", ""] });
+
+    assert.equal(result.ok, true);
+    assert.equal(put(env)[0].url, "/remote.php/webdav/report.pdf");
+});
+
+test("webroot: status.php が使えない環境では先頭候補のまま実行する（従来動作）", async () => {
+    const { result, env } = await run({
+        handler: (call) => {
+            if (call.url.endsWith("/status.php")) return { status: 404, body: "" };
+            if (call.method === "PUT" && call.url.includes("/remote.php/webdav/")) return { status: 201, body: "" };
+            if (call.method === "POST") return ocsOk({ id: 2, url: "https://cloud.example.com/s/W" });
+            return ocsOk({ id: 2 });
+        },
+    }, { webroot: ["/nextcloud"] });
+
+    assert.equal(result.ok, true);
+    assert.equal(put(env)[0].url, "/nextcloud/remote.php/webdav/report.pdf");
+});
+
+test("WebDAV でない URL に当たったら 405 の意味と実際の宛先を伝える", async () => {
+    const { result } = await run({
+        handler: (call) =>
+            call.url.endsWith("/status.php") ? { status: 404, body: "" } : { status: 405, body: "" },
+    }, { webroot: ["/index.php/apps/files"] });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /405/);
+    assert.match(result.error, /webroot/);
+    assert.match(result.error, /\/index\.php\/apps\/files\/remote\.php\/webdav\/report\.pdf/);
+});
+
+test("webroot の確定はファイル選択より後（キャンセル時は一切通信しない）", async () => {
+    const { result, env } = await run({ file: null }, { webroot: ["/nc", ""] });
+
+    assert.equal(result.cancelled, true);
+    assert.equal(env.calls.length, 0);
 });
