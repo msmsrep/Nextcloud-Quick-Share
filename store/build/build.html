@@ -18,11 +18,9 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* ---------- 出力する画像の規格 ---------- */
 
-// スクリーンショットは各ストアの規定サイズをすべて書き出す。
+// スクリーンショットは Chrome ウェブストア規定の 1280x800 だけを書き出す。
 const SHOT_FORMATS = [
-    { w: 1366, h: 768, note: "Edge アドオン" },
-    { w: 1280, h: 800, note: "Chrome ウェブストア" },
-    { w: 640, h: 400, note: "Chrome ウェブストア（小）" },
+    { w: 1280, h: 800, note: "Chrome ウェブストア / Edge アドオン" },
 ];
 
 const SHOTS = [
