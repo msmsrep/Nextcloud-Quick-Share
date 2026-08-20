@@ -292,6 +292,71 @@ function runUpload(webrootCandidates, password, expireDate) {
             }
             document.body.appendChild(box);
             setTimeout(() => box.remove(), 15000);
+            return box;
+        };
+
+        // --- アップロード後の一覧更新 -----------------------------------------
+        // サイト UI でアップロードしたときと同じように、ページの一覧にも今置いた
+        // ファイルを出したい。手段は 2 段構え。
+        //
+        // 1) ページ内更新: OCA.Files.App.fileList.reload() を呼ぶ。ただしこの
+        //    コードは isolated world で動くのでページ側の JS には触れられない。
+        //    MAIN world へ注入できる chrome.scripting はサービスワーカーにしか
+        //    無いため、background.js に依頼する（ポップアップはもう閉じている）。
+        // 2) 駄目なら再読み込み: 新しい Files アプリ（NC 28 以降）のように
+        //    fileList が無い作りでも、ページごと読み込み直せば一覧は最新になる。
+
+        // 表示中のフォルダ。新旧どちらの Files アプリも ?dir= に入れている。
+        // 省略時（NC 28+ の /apps/files/files/{fileid} など）はルート扱い。
+        const currentDir = () => {
+            const dir = new URLSearchParams(location.search || "").get("dir");
+            return dir ? dir : "/";
+        };
+
+        // 置き場所は常に WebDAV のルート直下なので、別フォルダを開いている画面を
+        // 読み込み直しても見た目は変わらない。無駄な再読み込みはしない。
+        const listShowsUpload = () =>
+            location.pathname.includes("/apps/files") && currentDir() === "/";
+
+        // 1) ページ内更新の依頼。SW が居ない / 旧 Files アプリでない場合は false。
+        const refreshInPage = async () => {
+            try {
+                const res = await chrome.runtime.sendMessage({ type: "refreshFileList" });
+                return !!(res && res.ok);
+            } catch {
+                return false; // 受け手が居ないときは例外になる
+            }
+        };
+
+        // 2) 予告してから再読み込みする。共有 URL を載せたトーストごと消えるため、
+        // 読む時間を取り、ユーザーが止められるようにする（URL はクリップボードと
+        // ポップアップ側の storage.session にも残るので、消えても失われない）。
+        const scheduleReload = (box, seconds) => {
+            const row = document.createElement("div");
+            row.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:8px;color:#555;";
+
+            const label = document.createElement("span");
+            const cancel = document.createElement("button");
+            cancel.type = "button";
+            cancel.textContent = "更新しない";
+            cancel.style.cssText = "font:inherit;padding:2px 8px;cursor:pointer;";
+
+            let left = seconds;
+            let stopped = false;
+            // clearTimeout に頼らずフラグで止める（タイマー ID を持ち回らない）。
+            const tick = () => {
+                if (stopped) return;
+                if (left <= 0) { location.reload(); return; }
+                label.textContent = "一覧を更新します（" + left + "）";
+                left -= 1;
+                setTimeout(tick, 1000);
+            };
+            cancel.addEventListener("click", () => { stopped = true; row.remove(); });
+
+            row.appendChild(label);
+            row.appendChild(cancel);
+            box.appendChild(row);
+            tick();
         };
 
         // ファイル選択ダイアログを開いた時点でポップアップは閉じ、executeScript の
@@ -339,7 +404,19 @@ function runUpload(webrootCandidates, password, expireDate) {
                 copied = true;
             } catch { /* コピー失敗はリンク表示でフォローする */ }
 
-            toast(copied ? "共有リンクをコピーしました" : "共有リンクを作成しました", shareUrl);
+            const box = toast(copied ? "共有リンクをコピーしました" : "共有リンクを作成しました", shareUrl);
+
+            // 追加したファイルが載るはずの画面なら、サイト UI と同じく最新化する。
+            // ページ内で更新できたなら再読み込みはしない（共有 URL の通知も残る）。
+            let refresh = "none";
+            if (listShowsUpload()) {
+                if (await refreshInPage()) {
+                    refresh = "list";
+                } else {
+                    refresh = "reload";
+                    scheduleReload(box, 5);
+                }
+            }
 
             return remember({
                 ok: true,
@@ -350,6 +427,7 @@ function runUpload(webrootCandidates, password, expireDate) {
                 // 作成時に一緒に渡しているので、共有が作れた = 設定も入っている。
                 passwordSet: !!password,
                 expireSet: !!expireDate,
+                refresh, // "list"（ページ内更新） / "reload"（再読み込み） / "none"
             });
         } catch (e) {
             const message = e && e.message ? e.message : String(e);

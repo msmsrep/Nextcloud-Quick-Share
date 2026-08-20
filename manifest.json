@@ -6,6 +6,10 @@
 
   "permissions": ["activeTab", "scripting", "storage"],
 
+  "background": {
+    "service_worker": "src/background.js"
+  },
+
   "icons": {
     "16": "icon/icon-16.png",
     "32": "icon/icon-32.png",

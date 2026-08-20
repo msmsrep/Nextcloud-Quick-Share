@@ -80,11 +80,13 @@ function ocsFail(statuscode, message) {
  *   file       ファイル選択の結果（null ならキャンセル扱い）
  *   handler    (call, calls) => { status, body }  fetch の応答を決める
  *   clipboard  false にすると writeText を失敗させる
+ *   refresh    SW（ページ内の一覧更新）の応答。未指定なら「受け手が居ない」= 例外
  */
 function makeEnv(opts = {}) {
     const calls = [];
     const timeouts = [];
     const stored = {};
+    const messages = [];
 
     const origin = opts.origin ?? "https://cloud.example.com";
     const pathname = opts.pathname ?? "/apps/files";
@@ -149,13 +151,21 @@ function makeEnv(opts = {}) {
         calls,
         timeouts,
         stored,
+        messages,
         makeFile,
         ocsOk,
         ocsFail,
         defaultHandler,
 
         document,
-        location: { origin, pathname, href: origin + pathname },
+        location: {
+            origin,
+            pathname,
+            search: opts.search ?? "",
+            href: origin + pathname + (opts.search ?? ""),
+            // 一覧更新のための再読み込み。テストでは記録だけする。
+            reload() { env.reloaded = true; },
+        },
         window: { addEventListener() {} },
         navigator: {
             clipboard: {
@@ -166,11 +176,23 @@ function makeEnv(opts = {}) {
             },
         },
         chrome: {
+            runtime: {
+                // ページ内更新の依頼先。既定では SW が応答しない状況を再現する
+                // （リスナーが居ないと sendMessage は例外になる）。
+                async sendMessage(message) {
+                    messages.push(message);
+                    if (opts.refresh === undefined) {
+                        throw new Error("Could not establish connection. Receiving end does not exist.");
+                    }
+                    return opts.refresh;
+                },
+            },
             storage: {
                 session: { async set(obj) { Object.assign(stored, obj); } },
             },
         },
         // 実際には待たない。toast の後片付けタイマーでテストが止まらないようにする。
+        // 発火させたいテストは runTimers() で明示的に呼ぶ。
         setTimeout(fn, ms) { timeouts.push({ fn, ms }); return timeouts.length; },
 
         async fetch(url, init = {}) {
@@ -194,9 +216,38 @@ function makeEnv(opts = {}) {
     return env;
 }
 
+/**
+ * 記録済みの setTimeout を発火させる。ms を指定するとその遅延のものだけを対象にする。
+ * コールバックが次のタイマーを積む（カウントダウン）ので limit 回まで追いかける。
+ */
+function runTimers(env, ms, limit = 20) {
+    for (let i = 0; i < limit; i++) {
+        const timer = env.timeouts.find((t) => !t.fired && (ms === undefined || t.ms === ms));
+        if (!timer) return;
+        timer.fired = true;
+        timer.fn();
+    }
+}
+
+/** toast の中から条件に合う要素を探す（再読み込みの「更新しない」ボタンなど）。 */
+function findElement(env, predicate) {
+    const walk = (el) => {
+        if (predicate(el)) return el;
+        for (const child of el.children || []) {
+            const hit = walk(child);
+            if (hit) return hit;
+        }
+        return null;
+    };
+    return walk(env.document.body);
+}
+
 /** 指定メソッド・URL 部分一致の fetch 呼び出しを取り出す。 */
 function callsMatching(env, method, fragment) {
     return env.calls.filter((c) => c.method === method && c.url.includes(fragment));
 }
 
-module.exports = { loadUploader, makeEnv, makeElement, makeFile, ocsOk, ocsFail, callsMatching };
+module.exports = {
+    loadUploader, makeEnv, makeElement, makeFile,
+    ocsOk, ocsFail, callsMatching, runTimers, findElement,
+};

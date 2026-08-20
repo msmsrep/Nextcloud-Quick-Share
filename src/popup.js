@@ -88,6 +88,10 @@ const describeResult = (res) => {
     if (res.passwordSet) lines.push("・パスワード設定済み");
     if (res.expireSet) lines.push("・有効期限設定済み");
     lines.push(res.copied ? "・共有URLをコピーしました" : "・下のボタンでURLをコピーできます");
+    // 一覧をどう更新したかを添える。再読み込みの場合は、心当たりのない
+    // リロードに見えないよう理由まで書く（ユーザーが止めた場合も実害はない）。
+    if (res.refresh === "list") lines.push("・ページの一覧を更新しました");
+    if (res.refresh === "reload") lines.push("・ページを読み込み直して一覧を更新しました");
     setStatus(lines.join("\n"), "ok");
     if (res.url) showShareUrl(res.url);
 };
