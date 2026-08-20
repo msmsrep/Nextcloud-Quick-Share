@@ -2,7 +2,9 @@
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { loadUploader, makeEnv, makeFile, ocsOk, ocsFail, callsMatching } = require("./harness.js");
+const {
+    loadUploader, makeEnv, makeFile, ocsOk, ocsFail, callsMatching, runTimers, findElement,
+} = require("./harness.js");
 
 /** env を作って runUpload を実行し、結果と env を返す。 */
 async function run(opts = {}, args = {}) {
@@ -286,4 +288,87 @@ test("webroot の確定はファイル選択より後（キャンセル時は一
 
     assert.equal(result.cancelled, true);
     assert.equal(env.calls.length, 0);
+});
+
+// --- アップロード後の一覧更新 ---------------------------------------------
+// サイト UI と同じく、追加したファイルがその場で一覧に出るようにする。
+// 注入先は isolated world でページ側の JS を呼べないため、手段は再読み込み。
+
+const cancelButton = (env) =>
+    findElement(env, (el) => el.tagName === "BUTTON" && el.textContent === "更新しない");
+
+test("ページ内で一覧を更新できたら再読み込みはしない（通知を消さない）", async () => {
+    const { result, env } = await run({ pathname: "/apps/files", refresh: { ok: true } });
+
+    assert.equal(result.refresh, "list");
+    assert.deepEqual(env.messages, [{ type: "refreshFileList" }]);
+    assert.ok(!cancelButton(env), "再読み込みの予告は出さない");
+
+    runTimers(env, 1000);
+    assert.ok(!env.reloaded);
+});
+
+test("ページ内更新が使えなければ、予告のあとページを再読み込みする", async () => {
+    const { result, env } = await run({ pathname: "/apps/files" });
+
+    assert.equal(result.refresh, "reload");
+    assert.equal(env.messages.length, 1, "まずページ内更新を試してから再読み込みに落とす");
+    assert.ok(cancelButton(env), "止めるためのボタンを出す");
+    assert.ok(!env.reloaded, "予告前に読み込み直さない");
+
+    runTimers(env, 1000);
+    assert.equal(env.reloaded, true);
+});
+
+test("サブディレクトリ設置でも Files アプリなら一覧を更新する", async () => {
+    const { result, env } = await run({ pathname: "/nextcloud/index.php/apps/files" });
+
+    assert.equal(result.refresh, "reload");
+    runTimers(env, 1000);
+    assert.equal(env.reloaded, true);
+});
+
+test("別フォルダを開いているときは何もしない（保存先はルート直下）", async () => {
+    const { result, env } = await run({ pathname: "/apps/files", search: "?dir=/Photos" });
+
+    assert.equal(result.refresh, "none");
+    assert.equal(env.messages.length, 0, "無駄に SW を起こさない");
+    assert.ok(!cancelButton(env));
+    runTimers(env, 1000);
+    assert.ok(!env.reloaded);
+});
+
+test("Files アプリ以外のページでは何もしない", async () => {
+    const { result, env } = await run({ pathname: "/apps/dashboard" });
+
+    assert.equal(result.refresh, "none");
+    assert.equal(env.messages.length, 0);
+    runTimers(env, 1000);
+    assert.ok(!env.reloaded);
+});
+
+test("「更新しない」を押したら再読み込みは起きない", async () => {
+    const { env } = await run({ pathname: "/apps/files" });
+
+    cancelButton(env).dispatch("click");
+    runTimers(env, 1000);
+    assert.ok(!env.reloaded, "ユーザーが止めたら共有リンクの表示を残す");
+});
+
+test("失敗したときは一覧を更新しない（画面も SW も触らない）", async () => {
+    const { result, env } = await run({
+        pathname: "/apps/files",
+        handler: (call) => {
+            if (call.url.endsWith("/status.php")) {
+                return { status: 200, body: { installed: true, version: "30.0.0.0" } };
+            }
+            if (call.method === "PUT") return { status: 507, body: "" };
+            return ocsOk({});
+        },
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(env.messages.length, 0);
+    runTimers(env, 1000);
+    assert.ok(!env.reloaded);
 });

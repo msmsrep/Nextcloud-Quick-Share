@@ -59,6 +59,15 @@ const area = (name) => ({
 });
 
 window.chrome = {
+    // 一覧更新の依頼先（実際は background.js）。ポップアップは使わないが、
+    // 注入コードと同じ形を置いておく。
+    runtime: {
+        id: "stub",
+        sendMessage: async (message) => {
+            console.log("[stub] sendMessage:", JSON.stringify(message));
+            return { ok: true };
+        },
+    },
     storage: { sync: area("sync"), local: area("local"), session: area("session") },
     tabs: {
         query: async () => [{ id: 1, url: DETECTIONS[SCENARIO].origin + "/apps/files" }],
@@ -83,6 +92,7 @@ window.chrome = {
                     settingsError: null,
                     passwordSet: !!password,
                     expireSet: !!expireDate,
+                    refresh: "list", // ページ内で一覧を更新できた場合の表示
                 },
             }];
         },
