@@ -3,6 +3,10 @@
 開いている Nextcloud のページからファイルをアップロードし、パスワード付き・期限付きの
 公開共有リンクを作成して URL をクリップボードにコピーする Edge / Chrome 拡張機能です。
 
+紹介ページ：
+[msmsrep.github.io/Nextcloud-Quick-Share](https://msmsrep.github.io/Nextcloud-Quick-Share/)
+（ソースは [`docs/`](docs/)）
+
 Edgeストアで公開しています：
 [Nextcloud-Quick-Share](https://microsoftedge.microsoft.com/addons/detail/nextcloudquickshare/kcgolhlghbhikipkbjeddmfijdningme)
 
