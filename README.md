@@ -53,14 +53,11 @@ Nextcloud と判定できないページでも、**警告を確認したうえ�
 
 ## 開発者の支援
 
-この拡張機能は無料で、広告もトラッキングもありません。役に立ったと思ってもらえたら、
-開発と保守の支えになります（任意です）。
-
-- [GitHub Sponsors](https://github.com/sponsors/msmsrep) … 継続・1 回かぎりのどちらも
-- [Ko-fi](https://ko-fi.com/msmsrep) … GitHub のアカウントが無くても 1 回かぎりの少額から
-
-お金以外では、[Issue](https://github.com/msmsrep/Nextcloud-Quick-Share/issues) で不具合や
-要望を知らせる・Star を付ける・ストアにレビューを書く、どれも同じくらい助かります。
+無料・広告なしで作っています。任意ですが、支援は開発と保守の支えになります
+（[GitHub Sponsors](https://github.com/sponsors/msmsrep) /
+[Ko-fi](https://ko-fi.com/msmsrep)）。
+[Issue](https://github.com/msmsrep/Nextcloud-Quick-Share/issues) や Star、
+ストアのレビューも同じくらい助かります。
 
 ## セキュリティ設計
 
