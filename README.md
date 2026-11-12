@@ -51,6 +51,14 @@ Nextcloud と判定できないページでも、**警告を確認したうえ�
 （ボタンが「警告を承知で登録して続行」に変わります）。判定はあくまで誤操作防止のための
 目安で、続行するかどうかはユーザーが決める設計です。
 
+## 開発者の支援
+
+無料・広告なしで作っています。任意ですが、支援は開発と保守の支えになります
+（[GitHub Sponsors](https://github.com/sponsors/msmsrep) /
+[Ko-fi](https://ko-fi.com/msmsrep)）。
+[Issue](https://github.com/msmsrep/Nextcloud-Quick-Share/issues) や Star、
+ストアのレビューも同じくらい助かります。
+
 ## セキュリティ設計
 
 - **常時注入はしない。** コンテンツスクリプトを全サイトに登録する代わりに、
